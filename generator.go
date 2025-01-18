@@ -1,4 +1,4 @@
-package main
+package imgproxy
 
 import (
 	"crypto/hmac"
