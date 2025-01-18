@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -40,9 +41,9 @@ type Generator struct {
 	format   Format
 }
 
-func NewImgproxyUrlGenerator(config Config) *Repository {
+func NewImgproxyUrlGenerator(config Config) (*Repository, error) {
 	if config.Host == "" || config.Disk == "" {
-		panic("Host and Disk are required")
+		return nil, errors.New("host and disk are required")
 	}
 
 	// If no salt or key is provided, we won't encrypt the URL
@@ -50,22 +51,22 @@ func NewImgproxyUrlGenerator(config Config) *Repository {
 		return &Repository{
 			Config:         config,
 			qualityDefault: 0, // Defaults to img proxy default if 0
-		}
+		}, nil
 	}
 
 	var err error
 	if config.keyBin, err = hex.DecodeString(config.Key); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("error decoding key: %w", err)
 	}
 
 	if config.saltBin, err = hex.DecodeString(config.Salt); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("error decoding salt: %w", err)
 	}
 
 	return &Repository{
 		Config:         config,
 		qualityDefault: 0, // Defaults to img proxy default if 0
-	}
+	}, nil
 }
 
 func (g *Repository) File(fileName string) *Generator {
