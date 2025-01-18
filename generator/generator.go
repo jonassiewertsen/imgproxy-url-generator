@@ -1,21 +1,34 @@
 package generator
 
-import "fmt"
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"strings"
+)
+
+type Config struct {
+	Salt           string
+	saltBin        []byte
+	Key            string
+	keyBin         []byte
+	Host           string
+	Disk           string
+	QualityDefault int
+	EncodeUrl      bool
+}
 
 type Repository struct {
-	Salt             []byte
-	saltBin          []byte
-	Key              []byte
-	keyBin           []byte
-	Host             string
-	Disk             string // Cloud bucket
-	QualityDefault   int
-	EncryptionKey    *string
-	encryptionKeyBin []byte
-	PlainUrl         bool
+	Config                Config
+	qualityDefault        int
+	plainUrl              string
+	encryptedAndSignedUrl string
 }
 
 type Generator struct {
+	Config   Config
 	disk     string
 	host     string
 	fileName string
@@ -27,25 +40,43 @@ type Generator struct {
 	format   Format
 }
 
-func NewImgproxyUrlGenerator(host, disk string) *Repository {
+func NewImgproxyUrlGenerator(config Config) *Repository {
+	if config.Host == "" || config.Disk == "" {
+		panic("Host and Disk are required")
+	}
+
+	// If no salt or key is provided, we won't encrypt the URL
+	if config.Salt == "" || config.Key == "" {
+		return &Repository{
+			Config:         config,
+			qualityDefault: 0, // Defaults to img proxy default if 0
+		}
+	}
+
+	var err error
+	if config.keyBin, err = hex.DecodeString(config.Key); err != nil {
+		panic(err)
+	}
+
+	if config.saltBin, err = hex.DecodeString(config.Salt); err != nil {
+		panic(err)
+	}
+
 	return &Repository{
-		Host: host,
-		Disk: disk,
+		Config:         config,
+		qualityDefault: 0, // Defaults to img proxy default if 0
 	}
 }
 
-func (g *Repository) From(fileName string) *Generator {
-	if g.QualityDefault == 0 {
-		g.QualityDefault = 85
-	}
-
+func (g *Repository) File(fileName string) *Generator {
 	return &Generator{
-		disk:     g.Disk,
-		host:     g.Host,
+		Config:   g.Config,
+		disk:     g.Config.Disk,
+		host:     g.Config.Host,
 		fileName: fileName,
 		width:    0,
 		height:   0,
-		quality:  g.QualityDefault,
+		quality:  g.Config.QualityDefault,
 		crop:     false,
 		gravity:  "ce",
 		format:   WEBP,
@@ -95,17 +126,57 @@ func (g *Generator) Format(format Format) *Generator {
 }
 
 func (g *Generator) Get() string {
-	// Decide if using plain URL or encrypted URL
-	// Decide if using disk or cloud bucket
-
-	signature := "insecure"
+	path := g.generatePath()
 
 	sizeAndCrop := fmt.Sprintf("rs:%s:%d:%d", "fill", g.width, g.height)
 	gravity := fmt.Sprintf("g:%s", g.gravity)
 	quality := fmt.Sprintf("q:%d", g.quality)
-	parameters := fmt.Sprintf("%s/%s/%s/%s", sizeAndCrop, gravity, quality, "plain")
+	parameters := fmt.Sprintf("%s/%s/%s", sizeAndCrop, gravity, quality)
 
-	path := fmt.Sprintf("%s://%s", g.disk, g.fileName)
+	fileUrl := strings.Join([]string{string(g.Config.saltBin), parameters, path}, "/")
+	fileUrl = strings.Join([]string{fileUrl, string(g.format)}, ".") // Add the format to the URL
 
-	return fmt.Sprintf("%s/%s/%s/%s", g.host, signature, parameters, path)
+	signature := g.generateSignature(fileUrl)
+
+	return fmt.Sprintf("%s/%s/%s/%s.%s", g.host, signature, parameters, path, g.format)
+}
+
+func (g *Generator) generateSignature(fileUrl string) string {
+	if g.Config.Salt == "" && g.Config.Key == "" {
+		return "insecure" // Has to be defined if no signature is provided
+	}
+
+	mac := hmac.New(sha256.New, g.Config.keyBin)
+	mac.Write([]byte(fileUrl))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+}
+
+func (g *Generator) generatePath() string {
+	path := fmt.Sprintf("%s/%s", g.disk, g.fileName)
+
+	if g.Config.EncodeUrl {
+		return encodeFilePath(path)
+	}
+
+	return "plain/" + path
+}
+
+func encodeFilePath(filePath string) string {
+	// Encode the file path to Base64
+	encoded := base64.StdEncoding.EncodeToString([]byte(filePath))
+
+	// Replace characters as per the custom mapping
+	encoded = strings.NewReplacer("+", "-", "/", "_", "=", "").Replace(encoded)
+
+	// Add a slash ("/") after every 16 characters
+	var result strings.Builder
+	for i, r := range encoded {
+		result.WriteRune(r)
+		if (i+1)%16 == 0 { // Add '/' after every 16th character
+			result.WriteRune('/')
+		}
+	}
+
+	return result.String()
 }
