@@ -127,6 +127,10 @@ func (g *Generator) Format(format Format) *Generator {
 }
 
 func (g *Generator) Get() string {
+	if g.fileName == "" {
+		return "" // No file name provided. Return empty string
+	}
+
 	path := g.generatePath()
 
 	sizeAndCrop := fmt.Sprintf("rs:%s:%d:%d", "fill", g.width, g.height)
